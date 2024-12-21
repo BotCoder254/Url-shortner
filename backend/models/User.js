@@ -30,6 +30,24 @@ const userSchema = new mongoose.Schema({
     type: String,
     default: '',
   },
+  isVerified: {
+    type: Boolean,
+    default: false,
+  },
+  verificationToken: String,
+  verificationTokenExpires: Date,
+  resetPasswordToken: String,
+  resetPasswordExpires: Date,
+  lastPasswordChange: Date,
+  failedLoginAttempts: {
+    type: Number,
+    default: 0,
+  },
+  accountLocked: {
+    type: Boolean,
+    default: false,
+  },
+  lockUntil: Date,
   createdAt: {
     type: Date,
     default: Date.now,
@@ -46,6 +64,16 @@ const userSchema = new mongoose.Schema({
     type: Boolean,
     default: true,
   },
+  settings: {
+    theme: {
+      type: String,
+      default: 'light'
+    },
+    notifications: {
+      type: Boolean,
+      default: true
+    }
+  }
 });
 
 // Hash password before saving
@@ -57,6 +85,9 @@ userSchema.pre('save', async function(next) {
   try {
     const salt = await bcrypt.genSalt(10);
     this.password = await bcrypt.hash(this.password, salt);
+    if (this.isModified('password')) {
+      this.lastPasswordChange = Date.now();
+    }
     next();
   } catch (error) {
     next(error);
@@ -68,30 +99,79 @@ userSchema.methods.matchPassword = async function(enteredPassword) {
   return await bcrypt.compare(enteredPassword, this.password);
 };
 
-// Sign JWT and return
-userSchema.methods.getSignedJwtToken = function() {
-  return jwt.sign(
-    { id: this._id },
-    process.env.JWT_SECRET,
-    { expiresIn: process.env.JWT_EXPIRE }
-  );
+// Generate verification token
+userSchema.methods.generateVerificationToken = function() {
+  const verificationToken = crypto.randomBytes(32).toString('hex');
+  
+  this.verificationToken = crypto
+    .createHash('sha256')
+    .update(verificationToken)
+    .digest('hex');
+    
+  this.verificationTokenExpires = Date.now() + 24 * 60 * 60 * 1000; // 24 hours
+  
+  return verificationToken;
 };
 
-// Generate and hash password token
-userSchema.methods.getResetPasswordToken = function() {
-  // Generate token
-  const resetToken = crypto.randomBytes(20).toString('hex');
-
-  // Hash token and set to resetPasswordToken field
+// Generate password reset token
+userSchema.methods.generatePasswordResetToken = function() {
+  const resetToken = crypto.randomBytes(32).toString('hex');
+  
   this.resetPasswordToken = crypto
     .createHash('sha256')
     .update(resetToken)
     .digest('hex');
-
-  // Set expire
-  this.resetPasswordExpire = Date.now() + 10 * 60 * 1000; // 10 minutes
-
+    
+  this.resetPasswordExpires = Date.now() + 1 * 60 * 60 * 1000; // 1 hour
+  
   return resetToken;
+};
+
+// Check if account is locked
+userSchema.methods.isAccountLocked = function() {
+  return this.accountLocked && this.lockUntil && this.lockUntil > Date.now();
+};
+
+// Increment failed login attempts
+userSchema.methods.incrementLoginAttempts = async function() {
+  // Reset failed attempts if lock has expired
+  if (this.lockUntil && this.lockUntil < Date.now()) {
+    this.failedLoginAttempts = 1;
+    this.accountLocked = false;
+    this.lockUntil = undefined;
+  } else {
+    this.failedLoginAttempts += 1;
+    
+    // Lock account if more than 5 failed attempts
+    if (this.failedLoginAttempts >= 5) {
+      this.accountLocked = true;
+      this.lockUntil = Date.now() + 30 * 60 * 1000; // Lock for 30 minutes
+    }
+  }
+  
+  await this.save();
+};
+
+// Reset failed login attempts
+userSchema.methods.resetLoginAttempts = async function() {
+  this.failedLoginAttempts = 0;
+  this.accountLocked = false;
+  this.lockUntil = undefined;
+  await this.save();
+};
+
+// Sign JWT and return
+userSchema.methods.getSignedJwtToken = function() {
+  return jwt.sign(
+    { 
+      id: this._id,
+      isVerified: this.isVerified
+    },
+    process.env.JWT_SECRET,
+    { 
+      expiresIn: process.env.JWT_EXPIRE 
+    }
+  );
 };
 
 // Update last login

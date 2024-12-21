@@ -1,4 +1,7 @@
+const path = require('path');
+process.chdir(path.dirname(require.main.filename));
 require('dotenv').config();
+
 const express = require('express');
 const mongoose = require('mongoose');
 const cors = require('cors');
@@ -6,7 +9,6 @@ const helmet = require('helmet');
 const compression = require('compression');
 const rateLimit = require('express-rate-limit');
 const useragent = require('express-useragent');
-const path = require('path');
 
 const app = express();
 
@@ -117,7 +119,8 @@ app.get('/health', (req, res) => {
   res.json({
     status: 'healthy',
     timestamp: new Date(),
-    uptime: process.uptime()
+    uptime: process.uptime(),
+    nodeVersion: process.version
   });
 });
 
